@@ -26,7 +26,9 @@ compute_pei <- function(df, PEI_year = NULL) {
         filter(year %in% (PEI_year - 2):PEI_year) |>
         # Apply data capture and site operation rules to each year independently
         filter(
-            operational_all_year == TRUE, # Technically don't need this for increments since sites are already operational for the whole cohort
+            # Note we technically don't need to apply the operational requirement for increments calculations
+            # This is because sites in the cohort are already operational for the whole 4 years
+            operational_all_year == TRUE,
             capture >= data_capture_threshold
         ) |>
         group_by(year, site) |>
@@ -38,7 +40,8 @@ compute_pei <- function(df, PEI_year = NULL) {
         summarise(
             n_sites = n(),
             se_sampling_between_site = sd(mean, na.rm = TRUE) / sqrt(n_sites),
-            se_sampling_within_site_combined = sqrt(sum(se_sampling_within_site^2, na.rm = TRUE)) / n_sites, # combine standard errors of annual mean from each site assuming independence
+            # combine standard errors of annual mean from each site assuming independence:
+            se_sampling_within_site_combined = sqrt(sum(se_sampling_within_site^2, na.rm = TRUE)) / n_sites,
             se_total = sqrt(se_sampling_between_site^2 + se_sampling_within_site_combined^2),
             mean = mean(mean, na.rm = TRUE),
             sites = paste(sort(unique(site)), collapse = "; "),

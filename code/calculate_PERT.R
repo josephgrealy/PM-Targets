@@ -12,7 +12,7 @@ for (package in packages) {
     }
 }
 
-source("code/parameters.R") # Loads latest_year, data_capture_threshold and folder locations 
+source("code/parameters.R") # Loads latest_year, data_capture_threshold and folder locations
 source("code/functions.R") # Loads compute_pei() and build_cohort() functions for PERT
 
 dir.create(tables_folder, recursive = TRUE, showWarnings = FALSE)
@@ -93,7 +93,10 @@ site_info <- openair::importMeta(source = "aurn", all = TRUE) %>%
     # Select only PM2.5 monitoring sites
     filter(variable %in% c("PM2.5", "GR2.5")) |>
     mutate(measurement = ifelse(variable == "PM2.5", "Hourly", "Daily")) %>%
-    select(site, code, latitude, longitude, site_type, zone, measurement, start_date, end_date) %>% # we need zone for the PERT
+    select(
+        site, code, latitude, longitude,
+        site_type, zone, measurement, start_date, end_date
+    ) %>% # we need zone for the PERT
     unique() |>
     # Change the name of sites that changed their name to their current name
     # As openair metadata only gives current name
@@ -228,17 +231,23 @@ PERT_summary <- delta_summary |>
             base_PEI - delta_PEI_cumulative,
             PEI
         ),
+        # Note that we have already summed the standard errors for the increments by this point
         se_PEI = if_else(
             year > 2018,
-            sqrt(base_se_PEI^2 + se_delta_PEI_cumulative^2), # Note that we have already summed the standard errors for the increments by this point
+            sqrt(base_se_PEI^2 + se_delta_PEI_cumulative^2),
             se_PEI
         ),
 
         # Add percent change and standard error
-        perc_change = janitor::round_half_up(100 * (delta_PEI_cumulative / base_PEI), digits = 2), # we have to round this to an integer for comparing with PERT but after computing confidence intervals
-        # Note we have to calculate the standard error using the delta method here because we are dividing random variables instead of adding
+        # we have to round this to an integer for comparing with PERT but after computing confidence intervals
+        perc_change = janitor::round_half_up(100 * (delta_PEI_cumulative / base_PEI), digits = 2),
+        # Note we have to calculate the standard error using the delta method here
+        # This is because we are dividing random variables instead of adding
         # For full workings of this see our GitHub Wiki or the document in the uncertainties folder on sharepoint
-        se_perc_change = sqrt((100 / base_PEI)^2 * se_delta_PEI_cumulative^2 + (100 * delta_PEI_cumulative / base_PEI^2)^2 * base_se_PEI^2),
+        se_perc_change = sqrt(
+            (100 / base_PEI)^2 * se_delta_PEI_cumulative^2 +
+                (100 * delta_PEI_cumulative / base_PEI^2)^2 * base_se_PEI^2
+        ),
     ) |>
     # Tidy up columns
     select(year, PEI, se_PEI, everything(), -base_PEI, -base_se_PEI)
@@ -255,10 +264,10 @@ PERT_summary_CIs <- PERT_summary %>%
         ci_delta_PEI = janitor::round_half_up(1.96 * se_delta_PEI, digits = 2),
         ci_delta_PEI_cumulative = janitor::round_half_up(1.96 * se_delta_PEI_cumulative, digits = 2),
         ci_perc_change = janitor::round_half_up(1.96 * se_perc_change, digits = 2),
-    ) 
+    )
 
 # For accessibility upper and lower bounds should be given
-PERT_summary_CIs_bounds <- PERT_summary_CIs |> 
+PERT_summary_CIs_bounds <- PERT_summary_CIs |>
     # Convert to lower and upper bounds
     mutate(
         ci_PEI_lower = PEI - ci_PEI,
@@ -279,9 +288,10 @@ PERT_summary_CIs_bounds <- PERT_summary_CIs |>
         perc_change, ci_perc_change_lower, ci_perc_change_upper
     )
 
-# Produce another version with the +- absolute uncertainty (not using % uncertainty as it might be confusing for the % change columns)
+# Produce another version with the +- absolute uncertainty
+# (i.e. not using % uncertainty as it might be confusing for the % change columns)
 PERT_summary_CIs_absolute <- PERT_summary_CIs |>
-    # Here we have not rounded percent change 
+    # Here we have not rounded percent change
     select(
         year, PEI, ci_PEI,
         delta_PEI, ci_delta_PEI,
@@ -316,7 +326,7 @@ PERT_summary_CIs_bounds %>%
     write_excel_csv(file = file.path(tables_folder, "PERT_summary_accessible.csv"))
 
 # Save PERT summary table
-PERT_summary_CIs_absolute |> 
+PERT_summary_CIs_absolute |>
     mutate(across(where(is.numeric), ~ round(.x, 2))) %>% # Needed to avoid unwanted floating point errors
     select(
         "Year" = year,
@@ -360,7 +370,7 @@ saveRDS(site_summary_data, file = file.path(data_folder, "PERT_indicator_data.RD
 # We will send them a list of sites to use each year, and the annual mean for those sites
 
 # Pull out row with maximum number of sites for each year
-sites_to_include_per_year_summary <- site_summary_data %>%
+sites_to_include_per_year <- site_summary_data %>%
     group_by(year) %>%
     slice_max(n_sites, with_ties = FALSE) %>%
     ungroup() |>
@@ -368,19 +378,26 @@ sites_to_include_per_year_summary <- site_summary_data %>%
 
 # Get full site data
 # Get site_year combos to extract
-site_year_combos <- sites_to_include_per_year_summary %>%
+site_year_combos <- sites_to_include_per_year %>%
     mutate(site = str_split(sites, ";\\s*")) %>% # Split by "; "
     select(year, site) %>%
     unnest(site)
 
 site_data_filtered <- site_year_combos %>%
-    left_join(annual_site_pm25_pert, by = c("site", "year")) |> # May have joined extra times for hourly and daily measurements
+    left_join(annual_site_pm25_pert, by = c("site", "year")) |>
+    # Be careful since may have joined extra times for hourly and daily measurements in the line above
     left_join(site_info[, c("site", "measurement", "code", "latitude", "longitude")], by = c("site", "measurement")) |>
     # Filter out the daily measurement if there are hourly measurements for that site/year
+    # This is in case we joined multiple times
     group_by(year, site) |>
     filter(!(measurement == "Daily" & any(measurement == "Hourly"))) %>%
     ungroup() %>%
-    select(site, code, latitude, longitude, year, mean, se = se_sampling_within_site, capture, measurement, site_type, zone)
+    select(
+        site, code, latitude, longitude, year,
+        mean,
+        se = se_sampling_within_site, capture,
+        measurement, site_type, zone
+    )
 
 # Last thing for Imperial is to check % of sites excluded due to data capture for forecasting
 data_capture_statistics <- annual_site_pm25_pert |>
@@ -389,13 +406,15 @@ data_capture_statistics <- annual_site_pm25_pert |>
     summarise(
         "total sites" = n(),
         "sites meeting data capture threshold" = sum(capture >= data_capture_threshold),
-        "percent meeting data capture threshold" = round(100 * `sites meeting data capture threshold` / `total sites`, 1)
+        "percent meeting data capture threshold" = round(
+            100 * `sites meeting data capture threshold` / `total sites`, 1
+        )
     )
 
 # Save data for imperial
 write_xlsx(
     list(
-        sites_to_include = sites_to_include_per_year_summary,
+        sites_to_include = sites_to_include_per_year,
         site_data = site_data_filtered,
         data_capture_statistics = data_capture_statistics
     ),

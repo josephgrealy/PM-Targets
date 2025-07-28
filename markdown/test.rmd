@@ -1,0 +1,29 @@
+---
+title: "R Markdown Test"
+output: html_document
+---
+
+## Setup
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Basic R Code
+
+```{r}
+# A simple calculation
+x <- 1:1000
+mean(x)
+```
+
+## Plot Example
+
+```{r}
+# Basic plot
+plot(x, x^2, type = "b", col = "blue", main = "x vs x squared")
+```
+
+## Inline R
+
+The mean of x is `r mean(x)`.
