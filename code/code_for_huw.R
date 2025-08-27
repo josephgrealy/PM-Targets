@@ -13,15 +13,93 @@ for (package in packages) {
     }
 }
 
-source("code/parameters.R") # Loads latest_year, data_capture_threshold and folder locations
-source("code/functions.R") # Loads compute_pei() and build_cohort() functions for PERT
+# Parameters ------------
+
+# Update this to the latest reporting year
+latest_year <- 2024
+
+# Define data capture threshold for PERT
+data_capture_threshold <- 85
+
+# Define folder locations
+tables_folder <- "outputs/tables/"
+data_folder <- "data/"
+figures_folder <- "outputs/figures/"
 
 dir.create(tables_folder, recursive = TRUE, showWarnings = FALSE)
 dir.create(data_folder, recursive = TRUE, showWarnings = FALSE)
 
+# Define functions for calculating PERT ------------
+
+# Function to compute the population exposure indicator for a specific year
+compute_pei <- function(df, PEI_year = NULL) {
+    # Check required columns are present
+    required_cols <- c(
+        "year", "site", "measurement", "mean",
+        "se_sampling_within_site", "capture", "operational_all_year"
+    )
+    missing_cols <- setdiff(required_cols, names(df))
+    if (length(missing_cols) > 0) {
+        stop(
+            "Input data frame is missing required columns: ",
+            paste(missing_cols, collapse = ", ")
+        )
+    }
+
+    # Define default the PEI_year to the max year present, if not provided
+    if (is.null(PEI_year)) {
+        PEI_year <- max(df$year, na.rm = TRUE)
+    }
+
+    # Run pipe to calculate PEI
+    df |>
+        # Select the data for three years needed to calculate the PEI
+        filter(year %in% (PEI_year - 2):PEI_year) |>
+        # Apply data capture and site operation rules to each year independently
+        filter(
+            # Note we technically don't need to apply the operational requirement for increments calculations
+            # This is because sites in the cohort are already operational for the whole 4 years
+            operational_all_year == TRUE,
+            capture >= data_capture_threshold
+        ) |>
+        group_by(year, site) |>
+        # Filter out the daily measurement if there are hourly measurements for that site/year
+        filter(!(measurement == "Daily" & any(measurement == "Hourly"))) %>%
+        ungroup() %>%
+        # Calculate annual mean across sites
+        group_by(year) %>%
+        summarise(
+            n_sites = n(),
+            se_sampling_between_site = sd(mean, na.rm = TRUE) / sqrt(n_sites),
+            # combine standard errors of annual mean from each site assuming independence:
+            se_sampling_within_site_combined = 0, # sqrt(sum(se_sampling_within_site^2, na.rm = TRUE)) / n_sites,
+            se_total = sqrt(se_sampling_between_site^2 + se_sampling_within_site_combined^2),
+            mean = mean(mean, na.rm = TRUE),
+            sites = paste(sort(unique(site)), collapse = "; "),
+            .groups = "drop"
+        ) |>
+        select(year, mean, se_total, n_sites, sites)
+}
+
+# Define function to build the cohort of sites for a given increment year n
+# This checks
+#   1. sites are operational for the 4 years used in the increment calculation
+#   2. sites meet data capture threshold in at least 3 of the 4 years
+build_cohort <- function(df, n) {
+    df %>%
+        filter(between(year, n - 3, n)) %>% # years n-3, n-2, n-1, n
+        group_by(site, measurement) %>%
+        filter(
+            all(operational_all_year), # operational all four years
+            sum(capture >= data_capture_threshold) >= 3 # above data capture threshold in at least 3 of the 4 years
+        ) %>%
+        ungroup()
+}
+
 # Load Data ------------
 
 # Read in data (filter before loading in for efficiency!)
+# LOAD HOURLY PM2.5 DATA FROM OPENAIR
 hourly_pm25 <- open_dataset(aurn_database_folder) |>
     filter(
         measurement == "Hourly",
@@ -31,23 +109,6 @@ hourly_pm25 <- open_dataset(aurn_database_folder) |>
     ) |>
     collect() |>
     select(site, year, date, value)
-
-    hourly_annual_pm25 <- hourly_pm25 %>%
-        group_by(site, year) %>%
-        summarise(
-            mean = mean(value, na.rm = TRUE), # Annual mean PM2.5
-            n_ok = sum(!is.na(value)), # Count of valid (non-NA) hourly values
-            .groups = "drop"
-        ) %>%
-        mutate(
-            capture = ifelse(
-                year %% 4 == 0, # Leap year check
-                (n_ok / (366 * 24)) * 100, # Capture rate for leap years
-                (n_ok / (365 * 24)) * 100 # Capture rate for normal years
-            ),
-            measurement = "Hourly"
-        ) %>%
-        select(site, year, mean, capture, measurement) # Final tidy output
 
 
 hourly_annual_pm25 <- hourly_pm25 %>%
@@ -71,6 +132,7 @@ hourly_annual_pm25 <- hourly_pm25 %>%
     ) %>%
     select(site, year, mean, se_sampling_within_site, capture, measurement) # Final tidy output
 
+# LOAD HOURLY PM2.5 DATA FROM OPENAIR
 daily_pm25 <- open_dataset(aurn_database_folder) |>
     filter(
         measurement == "Daily",
@@ -168,7 +230,7 @@ pei_base <- annual_site_pm25_pert |>
 pei_base_summary <- pei_base |>
     summarise(
         mean = janitor::round_half_up(mean(mean, na.rm = TRUE), digits = 2),
-        se = sqrt(sum(se_total^2, na.rm = TRUE)) / 3, # Should it be sqrt(3)
+        se = sqrt(sum(se_total^2, na.rm = TRUE)) / 3, # Should it be sqrt(3) ???
         .groups = "drop"
     ) |>
     mutate(year = 2018) |>
@@ -438,83 +500,4 @@ write_xlsx(
         data_capture_statistics = data_capture_statistics
     ),
     path = file.path(tables_folder, "PERT_data_for_Imperial.xlsx")
-)
-
-
-# Plot ------------
-
-source("code/functions.R") # Loads compute_pei() and build_cohort() functions for PERT
-source("code/themes_colours.R")
-
-colour_dictionary <- c(
-    "PERT progress" = gss_colour_palette[1]
-)
-
-PERT_summary_CIs_bounds <- readRDS("data/PERT_summary_accessible.RDS")
-
-df <- PERT_summary_CIs_bounds |> 
-    select(year, mean = perc_change, lower = ci_perc_change_lower, upper = ci_perc_change_upper) |> 
-    mutate(group_var = "PERT progress") |> 
-    mutate(across(where(is.numeric), ~ replace_na(., 0)))
-
-fig3a_plot <- line_plot(df, base_size = 25, label_spacing_factor = 0.12)
-
-# Save function which turns off clipping automatically
-save_govuk(
-    filename = "fig3a_PERT_progress.svg",
-    plot = fig3a_plot,
-    device = "svg",
-    path = figures_folder
-)
-
-PEI_base <- PERT_summary_CIs_bounds |> filter(year == 2018) |> 
-    select(PEI) |> pull()
-projections_2 <- projections |> filter(year == 2025) |> 
-    mutate(mean = 100 * (mean - PEI_base) / PEI_base)
-# another version
-df_plot <- df %>%
-    bind_rows(projections) |> 
-    mutate(mean = - mean, lower = -lower, upper = -upper) |> 
-    mutate(
-        ymin = lower,
-        ymax = upper
-    )
-
-bar_plot <- ggplot(df_plot, aes(x = factor(year), y = mean)) +
-    geom_col(fill = "#377eb8", width = 0.6) + # bars
-    geom_errorbar(aes(ymin = ymin, ymax = ymax), width = 0.2, color = "black") + # uncertainty bars
-    geom_hline(yintercept = -35, linetype = "dashed", color = "red", linewidth = 1) +
-     scale_y_continuous(
-    limits = c(-40, 3),
-    breaks = seq(-40, 0, by = 5),
-    labels = function(x) paste0(x, "%")
-  ) +
-    labs(
-        title = NULL,
-        x = NULL,
-        y = NULL
-    ) +
-    theme_minimal(base_size = 20) +
-    theme(
-        axis.title.y = element_text(margin = margin(r = 10)),
-        panel.grid.major.x = element_blank()
-    )
-
-save_govuk("fig3b_PERT_progress.svg", plot = bar_plot, device = "svg", path = figures_folder)
-
-
-# V4
-df <- PERT_summary_CIs_bounds |>
-    select(year, mean = PEI, lower = ci_PEI_lower, upper = ci_PEI_upper) |>
-    mutate(group_var = "PERT progress") |>
-    mutate(across(where(is.numeric), ~ replace_na(., 0)))
-
-fig4_plot <- line_plot(df, base_size = 25, label_spacing_factor = 0.12)
-
-# Save function which turns off clipping automatically
-save_govuk(
-    filename = "fig4_PERT_progress.svg",
-    plot = fig4_plot,
-    device = "svg",
-    path = figures_folder
 )

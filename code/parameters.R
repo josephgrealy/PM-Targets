@@ -7,6 +7,7 @@ data_capture_threshold <- 85
 # Define folder locations
 tables_folder <- "outputs/tables/"
 data_folder <- "data/"
+figures_folder <- "outputs/figures/"
 
 # Helper variables
 previous_year <- latest_year - 1
