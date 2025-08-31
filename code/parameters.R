@@ -22,7 +22,4 @@ month_levels <- c(
   "Nov", "Dec"
 )
 
-# It is important NOT to change the folder paths as they are used for reading/writing the data
-bucket_name <- "s3-ranch-033"
-aurn_database_folder <- file.path(paste0("s3://", bucket_name, "/aos_air_quality/", latest_year, "/aurn_database"))
-rds_folder <- file.path(paste0("aos_air_quality/", latest_year, "/rds_files"))
+# Define folder paths to database here:

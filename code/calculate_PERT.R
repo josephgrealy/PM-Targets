@@ -1,9 +1,7 @@
 rm(list = ls())
 
 # Load Packages ------------
-packages <- c("tidyverse", "aws.s3", "arrow", "lubridate", "writexl", "ggrepel", "readr", "showtext", "ggtext", "scales")
-
-
+packages <- c("tidyverse", "arrow", "lubridate", "writexl", "ggrepel", "readr", "showtext", "ggtext", "scales")
 
 # Check if packages needed are installed, if they are then load, if not install
 for (package in packages) {
@@ -21,7 +19,8 @@ dir.create(data_folder, recursive = TRUE, showWarnings = FALSE)
 
 # Load Data ------------
 
-# Read in data (filter before loading in for efficiency!)
+# Read in data from parquet databse (filter before loading in for efficiency!)
+# DEFINE DATABASE FOLDER PATH IN parameters.R, or load using openair R package directly
 hourly_pm25 <- open_dataset(aurn_database_folder) |>
     filter(
         measurement == "Hourly",
@@ -360,7 +359,7 @@ PERT_summary_CIs_absolute |>
     ) |>
     write_excel_csv(file = file.path(tables_folder, "PERT_summary_unrounded.csv"))
 
-# Save list of sites   ------------
+# Save list of sites  ------------
 
 # Get detailed info on which sites are included in which annual mean
 # Prepare increment and PEI base data
@@ -383,7 +382,7 @@ write_excel_csv(site_summary_data, file = file.path(tables_folder, "PERT_indicat
 # Save RDS for additional analysis and plots
 saveRDS(site_summary_data, file = file.path(data_folder, "PERT_indicator_data.RDS"))
 
-# Save site data for Imperial ------------
+# Save site data for assessing modelled PERT ------------
 
 # Imperial are going to try to use modelled grid square data to forecast the PERT
 # We will send them a list of sites to use each year, and the annual mean for those sites
@@ -418,7 +417,7 @@ site_data_filtered <- site_year_combos %>%
         measurement, site_type, zone
     )
 
-# Last thing for Imperial is to check % of sites excluded due to data capture for forecasting
+# Last thing is to check % of sites excluded due to data capture for forecasting
 data_capture_statistics <- annual_site_pm25_pert |>
     filter(operational_all_year, year >= 2016) |>
     group_by(year) |>
@@ -430,91 +429,12 @@ data_capture_statistics <- annual_site_pm25_pert |>
         )
     )
 
-# Save data for imperial
+# Save data 
 write_xlsx(
     list(
         sites_to_include = sites_to_include_per_year,
         site_data = site_data_filtered,
         data_capture_statistics = data_capture_statistics
     ),
-    path = file.path(tables_folder, "PERT_data_for_Imperial.xlsx")
-)
-
-
-# Plot ------------
-
-source("code/functions.R") # Loads compute_pei() and build_cohort() functions for PERT
-source("code/themes_colours.R")
-
-colour_dictionary <- c(
-    "PERT progress" = gss_colour_palette[1]
-)
-
-PERT_summary_CIs_bounds <- readRDS("data/PERT_summary_accessible.RDS")
-
-df <- PERT_summary_CIs_bounds |> 
-    select(year, mean = perc_change, lower = ci_perc_change_lower, upper = ci_perc_change_upper) |> 
-    mutate(group_var = "PERT progress") |> 
-    mutate(across(where(is.numeric), ~ replace_na(., 0)))
-
-fig3a_plot <- line_plot(df, base_size = 25, label_spacing_factor = 0.12)
-
-# Save function which turns off clipping automatically
-save_govuk(
-    filename = "fig3a_PERT_progress.svg",
-    plot = fig3a_plot,
-    device = "svg",
-    path = figures_folder
-)
-
-PEI_base <- PERT_summary_CIs_bounds |> filter(year == 2018) |> 
-    select(PEI) |> pull()
-projections_2 <- projections |> filter(year == 2025) |> 
-    mutate(mean = 100 * (mean - PEI_base) / PEI_base)
-# another version
-df_plot <- df %>%
-    bind_rows(projections) |> 
-    mutate(mean = - mean, lower = -lower, upper = -upper) |> 
-    mutate(
-        ymin = lower,
-        ymax = upper
-    )
-
-bar_plot <- ggplot(df_plot, aes(x = factor(year), y = mean)) +
-    geom_col(fill = "#377eb8", width = 0.6) + # bars
-    geom_errorbar(aes(ymin = ymin, ymax = ymax), width = 0.2, color = "black") + # uncertainty bars
-    geom_hline(yintercept = -35, linetype = "dashed", color = "red", linewidth = 1) +
-     scale_y_continuous(
-    limits = c(-40, 3),
-    breaks = seq(-40, 0, by = 5),
-    labels = function(x) paste0(x, "%")
-  ) +
-    labs(
-        title = NULL,
-        x = NULL,
-        y = NULL
-    ) +
-    theme_minimal(base_size = 20) +
-    theme(
-        axis.title.y = element_text(margin = margin(r = 10)),
-        panel.grid.major.x = element_blank()
-    )
-
-save_govuk("fig3b_PERT_progress.svg", plot = bar_plot, device = "svg", path = figures_folder)
-
-
-# V4
-df <- PERT_summary_CIs_bounds |>
-    select(year, mean = PEI, lower = ci_PEI_lower, upper = ci_PEI_upper) |>
-    mutate(group_var = "PERT progress") |>
-    mutate(across(where(is.numeric), ~ replace_na(., 0)))
-
-fig4_plot <- line_plot(df, base_size = 25, label_spacing_factor = 0.12)
-
-# Save function which turns off clipping automatically
-save_govuk(
-    filename = "fig4_PERT_progress.svg",
-    plot = fig4_plot,
-    device = "svg",
-    path = figures_folder
+    path = file.path(tables_folder, "PERT_data_for_modelling.xlsx")
 )

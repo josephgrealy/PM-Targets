@@ -1,7 +1,7 @@
 rm(list = ls())
 
 # Load Packages ------------
-packages <- c("tidyverse", "aws.s3", "arrow", "lubridate", "readr", "writexl")
+packages <- c("tidyverse", "arrow", "lubridate", "readr", "writexl")
 
 
 # Check if packages needed are installed, if they are then load, if not install
